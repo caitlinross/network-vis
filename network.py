@@ -48,7 +48,6 @@ def split_edges(G, routers, group_size):
 def slimfly_layout(G, num_groups, group_size):
     pos = {}
     groupid = -1
-    center = [0, 25]  # starting center for group 0
     total_vertices = G.number_of_nodes()
     routers, terminals = split_routers_terminals(G)
     terminal_edges, local_edges, global_edges = split_edges(G, routers, group_size)
@@ -57,6 +56,20 @@ def slimfly_layout(G, num_groups, group_size):
     if len(routers) != num_groups * group_size:
         print("WARNING: num_groups * group_size != num routers for slimfly layout")
         return pos
+
+    # determine the center of each group in each subgraph
+    subgraph = nx.Graph()
+    for i in range(num_groups/2):
+        subgraph.add_node(i)
+
+    # only need to do for one subgraph, and just change y to -y in other subgraph
+    subgraph_centers = nx.circular_layout(subgraph, center=[50, 100], dim=2, scale=120)
+    group_centers = {}
+    for id, coords in subgraph_centers.iteritems():
+        coords1 = list(coords)
+        group_centers[id] = coords1
+        coords[1] = -coords[1]
+        group_centers[id + num_groups/2] = coords
 
     # create group subgraphs to use circular_layout for coordinates
     group_graphs = {x: nx.Graph() for x in range(num_groups)}
@@ -75,11 +88,7 @@ def slimfly_layout(G, num_groups, group_size):
     # use circular layout and update center between each call
     group_coords = {}
     for i in range(num_groups):
-        group_coords[i] = nx.circular_layout(group_graphs[i], scale=6, center=center, dim=2)
-        if i == num_groups/2 - 1:
-            center = [0, -25]
-        else:
-            center[0] += 25
+        group_coords[i] = nx.circular_layout(group_graphs[i], scale=20, center=group_centers[i], dim=2)
 
     # throw our router coordinates into pos map
     for grp, gmap in group_coords.iteritems():
@@ -139,11 +148,11 @@ for nodeid, coords in all_coords.iteritems():
     # first check if this is a terminal or router
     if G.node[str(nodeid)]['viz']['color']['r'] == 255:
         # terminal
-        type_arr.InsertValue(nodeid, 0)
+        type_arr.InsertValue(nodeid, 1)
         coords.append(2)
     elif G.node[str(nodeid)]['viz']['color']['g'] == 255:
         # router
-        type_arr.InsertValue(nodeid, 1)
+        type_arr.InsertValue(nodeid, 2)
         coords.append(8)
     else:
         print("NO VALUE SAVED\n")
@@ -188,7 +197,6 @@ edge_geom.SetInputData(graph)
 edge_geom.Update()
 
 polydata = edge_geom.GetOutput()
-#polydata.SetPoints(points)
 polydata.GetPointData().AddArray(type_arr)
 
 writer = vtk.vtkXMLPolyDataWriter()
