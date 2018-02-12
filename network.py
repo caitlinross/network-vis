@@ -1,6 +1,7 @@
 import networkx as nx
 import vtk
 import math
+import random
 
 
 # get routers and terminal lists from graph
@@ -123,15 +124,34 @@ def slimfly_layout(G, num_groups, group_size):
     return pos
 
 
+# create some random time step data to test animation
+def create_random_temporal_data(all_coords):
+    step_arr = vtk.vtkIntArray().NewInstance()
+    step_arr.SetName("NumSends")
+    step_arr.SetNumberOfComponents(1)
+
+    for nodeid, coords in all_coords.iteritems():
+        coords = list(coords)
+        # first check if this is a terminal or router
+        if G.node[str(nodeid)]['viz']['color']['r'] == 255:
+            # terminal
+            step_arr.InsertValue(nodeid, random.randint(0, 20))
+        elif G.node[str(nodeid)]['viz']['color']['g'] == 255:
+            # router
+            step_arr.InsertValue(nodeid, random.randint(10, 200))
+
+    return step_arr
+
+
 # set these to figure out router groups
 # TODO change to program input args
 router_group_size = 13
 num_router_groups = 26
 
 points = vtk.vtkPoints().NewInstance()
-type_arr = vtk.vtkIntArray().NewInstance()
-type_arr.SetName("NodeType")
-type_arr.SetNumberOfComponents(1)
+#type_arr = vtk.vtkIntArray().NewInstance()
+#type_arr.SetName("NumSends")
+#type_arr.SetNumberOfComponents(1)
 
 # read in network connections from Graph XML format
 G = nx.read_gexf("connection-data/sfly3042.gexf")
@@ -148,11 +168,11 @@ for nodeid, coords in all_coords.iteritems():
     # first check if this is a terminal or router
     if G.node[str(nodeid)]['viz']['color']['r'] == 255:
         # terminal
-        type_arr.InsertValue(nodeid, 1)
+#        type_arr.InsertValue(nodeid, random.randint(0, 20))
         coords.append(2)
     elif G.node[str(nodeid)]['viz']['color']['g'] == 255:
         # router
-        type_arr.InsertValue(nodeid, 2)
+#        type_arr.InsertValue(nodeid, random.randint(10, 200))
         coords.append(8)
     else:
         print("NO VALUE SAVED\n")
@@ -197,12 +217,15 @@ edge_geom.SetInputData(graph)
 edge_geom.Update()
 
 polydata = edge_geom.GetOutput()
-polydata.GetPointData().AddArray(type_arr)
-
 writer = vtk.vtkXMLPolyDataWriter()
-writer.SetFileName("slimfly.vtp")
-writer.SetInputData(polydata)
-writer.Write()
+
+for i in range(100):
+    cur_step = create_random_temporal_data(all_coords)
+    polydata.GetPointData().AddArray(cur_step)
+
+    writer.SetFileName("slimfly" + str(i) + ".vtp")
+    writer.SetInputData(polydata)
+    writer.Write()
 
 
 
