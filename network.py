@@ -2,6 +2,16 @@ import networkx as nx
 import vtk
 import math
 import random
+import argparse
+
+ap = argparse.ArgumentParser()
+ap.add_argument("-n", "--network", required=False, help="network to visualize")
+ap.add_argument("-g", "--graphfile", required=True, help="graph ML file")
+ap.add_argument("-r", "--routerfile", required=True, help="router data file")
+ap.add_argument("-t", "--termfile", required=True, help="terminal data file")
+ap.add_argument("-i", "--samp_interval", required=True, help="interval for sampling data")
+ap.add_argument("-e", "--samp_end_time", required=True, help="samp-end-time")
+args = vars(ap.parse_args())
 
 
 # get routers and terminal lists from graph
@@ -143,11 +153,52 @@ def create_random_temporal_data(all_coords):
     return step_arr
 
 
+def read_sim_data(filename, node_type, num_terminals, num_samples, samp_interval):
+    data = {}
+
+    f = open(filename, "r")
+    isStart = True
+    cols = []
+    node_id = -1
+    for line in f:
+        if isStart:
+            cols = line.split(",")
+            isStart = False
+        else:
+            tokens = line.strip().split(",")
+            if node_type == "router":
+                node_id = num_terminals + int(tokens[cols.index("router_id")])
+            elif node_type == "terminal":
+                node_id = int(tokens[cols.index("terminal_id")])
+            #end_time = float(tokens[cols.index("end_time")])
+            idx = int(float(tokens[cols.index("end_time")])/samp_interval)
+            if node_id not in data:
+                data[node_id] = [0 for i in range(num_samples)]
+            else:
+                data[node_id][idx] = sum([int(i) for i in tokens[cols.index("end_time")+1:]])
+
+    return data
+
+
+def get_data_step(term_data, router_data, step):
+    step_arr = vtk.vtkIntArray().NewInstance()
+    step_arr.SetName("VC_Occupancy")
+    step_arr.SetNumberOfComponents(1)
+
+    for key, value in term_data.iteritems():
+        step_arr.InsertValue(key, term_data[key][step])
+    for key, value in router_data.iteritems():
+        step_arr.InsertValue(key, router_data[key][step])
+
+    return step_arr
+
+
 # set these to figure out router groups
 # TODO change to program input args
 router_group_size = 13
 num_router_groups = 26
 
+num_samples = int(args["samp_end_time"])/int(args["samp_interval"])
 points = vtk.vtkPoints().NewInstance()
 #type_arr = vtk.vtkIntArray().NewInstance()
 #type_arr.SetName("NumSends")
@@ -161,6 +212,12 @@ all_coords = slimfly_layout(G, num_router_groups, router_group_size)
 routers, terminals = split_routers_terminals(G)
 term_edges, local_edges, global_edges = split_edges(G, routers, router_group_size)
 
+print("reading router data...")
+router_data = read_sim_data(args["routerfile"], "router", len(terminals), num_samples, int(args["samp_interval"]))
+print("done\nreading terminal data...")
+terminal_data = read_sim_data(args["termfile"], "terminal", len(terminals), num_samples, int(args["samp_interval"]))
+print("done\n")
+
 # now terminal_coords contains the correct (2d) coordinates for all terminals and routers
 # input coords all terminals/routers
 for nodeid, coords in all_coords.iteritems():
@@ -168,11 +225,11 @@ for nodeid, coords in all_coords.iteritems():
     # first check if this is a terminal or router
     if G.node[str(nodeid)]['viz']['color']['r'] == 255:
         # terminal
-#        type_arr.InsertValue(nodeid, random.randint(0, 20))
+        #type_arr.InsertValue(nodeid, random.randint(0, 20))
         coords.append(2)
     elif G.node[str(nodeid)]['viz']['color']['g'] == 255:
         # router
-#        type_arr.InsertValue(nodeid, random.randint(10, 200))
+        #type_arr.InsertValue(nodeid, random.randint(10, 200))
         coords.append(8)
     else:
         print("NO VALUE SAVED\n")
@@ -219,11 +276,11 @@ edge_geom.Update()
 polydata = edge_geom.GetOutput()
 writer = vtk.vtkXMLPolyDataWriter()
 
-for i in range(100):
-    cur_step = create_random_temporal_data(all_coords)
+for i in range(num_samples):
+    cur_step = get_data_step(terminal_data, router_data, i)
     polydata.GetPointData().AddArray(cur_step)
 
-    writer.SetFileName("slimfly" + str(i) + ".vtp")
+    writer.SetFileName("sfly-vtp/slimfly" + str(i) + ".vtp")
     writer.SetInputData(polydata)
     writer.Write()
 
