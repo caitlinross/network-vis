@@ -114,10 +114,18 @@ def get_data_step(data, num_cores, step):
     for i in range(num_cores):
         if i in data:
             step_arr.InsertValue(i, data[i][step])
-            print(data[i][step])
         else:
             step_arr.InsertValue(i, 0)
 
+    return step_arr
+
+
+def get_sphere_data(data, core_num, step):
+    step_arr = vtk.vtkIntArray().NewInstance()
+    step_arr.SetName("NumSends")
+    step_arr.SetNumberOfComponents(1)
+
+    step_arr.InsertValue(0, data[core_num][step])
     return step_arr
 
 
@@ -136,7 +144,21 @@ edge_geom.SetInputData(graph)
 edge_geom.Update()
 
 polydata = edge_geom.GetOutput()
+
+g2 = vtk.vtkMutableUndirectedGraph()
+g2.SetNumberOfVertices(1)
+g2_point = vtk.vtkPoints().NewInstance()
+g2_point.InsertPoint(0, 315, 325, 0)
+g2.SetPoints(g2_point)
+
+node_geom = vtk.vtkGraphToPolyData()
+node_geom.SetInputData(g2)
+node_geom.Update()
+
+sphere_poly = node_geom.GetOutput()
+
 writer = vtk.vtkXMLPolyDataWriter()
+sphere_writer = vtk.vtkXMLPolyDataWriter()
 
 for i in range(num_samples):
     cur_step = get_data_step(core_data, num_cores, i)
@@ -145,3 +167,10 @@ for i in range(num_samples):
     writer.SetFileName("core-vtp/core" + str(i) + ".vtp")
     writer.SetInputData(polydata)
     writer.Write()
+
+    sphere_step = get_sphere_data(core_data, 2, i)
+    sphere_poly.GetPointData().AddArray(sphere_step)
+
+    sphere_writer.SetFileName("core-vtp/sphere" + str(i) + ".vtp")
+    sphere_writer.SetInputData(sphere_poly)
+    sphere_writer.Write()
