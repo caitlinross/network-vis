@@ -3,6 +3,7 @@ import vtk
 import math
 import random
 import argparse
+import sys
 
 ap = argparse.ArgumentParser()
 ap.add_argument("-n", "--network", required=False, help="network to visualize")
@@ -15,7 +16,7 @@ args = vars(ap.parse_args())
 
 
 # get routers and terminal lists from graph
-def split_routers_terminals(G):
+def sfly_split_routers_terminals(G):
     terminals = []
     routers = []
     for nodeid in G.nodes:
@@ -60,7 +61,7 @@ def slimfly_layout(G, num_groups, group_size):
     pos = {}
     groupid = -1
     total_vertices = G.number_of_nodes()
-    routers, terminals = split_routers_terminals(G)
+    routers, terminals = sfly_split_routers_terminals(G)
     terminal_edges, local_edges, global_edges = split_edges(G, routers, group_size)
     routerid_start = min(routers)
 
@@ -193,24 +194,74 @@ def get_data_step(term_data, router_data, step):
     return step_arr
 
 
+def sfly_set_vtk_points_array(all_coords, G, routers, terminals):
+    points = vtk.vtkPoints().NewInstance()
+    for nodeid, coords in all_coords.iteritems():
+        coords = list(coords)
+        # first check if this is a terminal or router
+        if G.node[str(nodeid)]['viz']['color']['r'] == 255:
+            # terminal
+            coords.append(2)
+        elif G.node[str(nodeid)]['viz']['color']['g'] == 255:
+            # router
+            coords.append(8)
+        else:
+            print("NO VALUE SAVED\n")
+
+        x = coords[0]
+        y = coords[1]
+        z = coords[2]
+        rad = 0
+        translation = 0
+        if nodeid in routers:
+            if nodeid - min(routers) < (max(routers) + 1 - min(routers))/2:
+                rad = math.pi / 2
+                translation = 30
+            else:
+                rad = 3 * math.pi / 2
+                translation = -30
+        else:
+            if nodeid - min(terminals) < (max(terminals) + 1 - min(terminals))/2:
+                rad = math.pi / 2
+                translation = 30
+            else:
+                rad = 3 * math.pi / 2
+                translation = -30
+        points.InsertPoint(nodeid, x, (y * math.cos(rad) - z * math.sin(rad)) + translation, y * math.sin(rad) + z * math.cos(rad))
+    return points
+
+
 # set these to figure out router groups
 # TODO change to program input args
 router_group_size = 13
 num_router_groups = 26
 
 num_samples = int(args["samp_end_time"])/int(args["samp_interval"])
-points = vtk.vtkPoints().NewInstance()
-#type_arr = vtk.vtkIntArray().NewInstance()
-#type_arr.SetName("NumSends")
-#type_arr.SetNumberOfComponents(1)
 
 # read in network connections from Graph XML format
-G = nx.read_gexf("connection-data/sfly3042.gexf")
+print("reading graph file...")
+G = nx.read_gexf(args["graphfile"])
+print("done")
 
-all_coords = slimfly_layout(G, num_router_groups, router_group_size)
+all_coords = {}
+routers = []
+terminals = []
+filename_out = "vtp-files/"
+print("creating layout for visualization...")
+if args["network"] == "slimfly":
+    all_coords = slimfly_layout(G, num_router_groups, router_group_size)
+    routers, terminals = sfly_split_routers_terminals(G)
+    filename_out += "slimfly/slimfly"
+elif args["network"] == "fattree":
+    filename_out += "fattree/fattree"
+    sys.exit("ERROR: fattree has not been implemented yet")
+elif args["network"] == "dragonfly":
+    filename_out += "dragonfly/dragonfly"
+    sys.exit("ERROR: dragonfly has not been implemented yet")
+else:
+    sys.exit("ERROR: --network type should be one of the following: slimfly, fattree, dragonfly")
+print("done")
 
-routers, terminals = split_routers_terminals(G)
-term_edges, local_edges, global_edges = split_edges(G, routers, router_group_size)
 
 print("reading router data...")
 router_data = read_sim_data(args["routerfile"], "router", len(terminals), num_samples, int(args["samp_interval"]))
@@ -218,56 +269,31 @@ print("done\nreading terminal data...")
 terminal_data = read_sim_data(args["termfile"], "terminal", len(terminals), num_samples, int(args["samp_interval"]))
 print("done\n")
 
-# now terminal_coords contains the correct (2d) coordinates for all terminals and routers
-# input coords all terminals/routers
-for nodeid, coords in all_coords.iteritems():
-    coords = list(coords)
-    # first check if this is a terminal or router
-    if G.node[str(nodeid)]['viz']['color']['r'] == 255:
-        # terminal
-        #type_arr.InsertValue(nodeid, random.randint(0, 20))
-        coords.append(2)
-    elif G.node[str(nodeid)]['viz']['color']['g'] == 255:
-        # router
-        #type_arr.InsertValue(nodeid, random.randint(10, 200))
-        coords.append(8)
-    else:
-        print("NO VALUE SAVED\n")
-    x = coords[0]
-    y = coords[1]
-    z = coords[2]
-    rad = math.pi/2
-    translation = 0
-    if nodeid in routers:
-        if nodeid - min(routers) < (max(routers) + 1 - min(routers))/2:
-            rad = math.pi / 2
-            translation = 30
-        else:
-            rad = 3 * math.pi / 2
-            translation = -30
-    else:
-        if nodeid - min(terminals) < (max(terminals) + 1 - min(terminals))/2:
-            rad = math.pi / 2
-            translation = 30
-        else:
-            rad = 3 * math.pi / 2
-            translation = -30
-    points.InsertPoint(nodeid, x, (y * math.cos(rad) - z * math.sin(rad)) + translation, y * math.sin(rad) + z * math.cos(rad))
-    #points.InsertPoint(nodeid, x, y, z)
-
 # using the vtkGraph approach
 graph = vtk.vtkMutableUndirectedGraph()
 graph.SetNumberOfVertices(G.number_of_nodes())
+
+# now terminal_coords contains the correct (2d) coordinates for all terminals and routers
+# input coords all terminals/routers
+if args["network"] == "slimfly":
+    points = sfly_set_vtk_points_array(all_coords, G, routers, terminals)
+    term_edges, local_edges, global_edges = split_edges(G, routers, router_group_size)
+    for v1, v2 in term_edges:
+        graph.LazyAddEdge(int(v1), int(v2))
+
+    for v1, v2 in local_edges:
+        graph.LazyAddEdge(int(v1), int(v2))
+
+    for v1, v2 in global_edges:
+        graph.LazyAddEdge(int(v1), int(v2))
+elif args["network"] == "fattree":
+    sys.exit("ERROR: fattree has not been implemented yet")
+elif args["network"] == "dragonfly":
+    sys.exit("ERROR: dragonfly has not been implemented yet")
+else:
+    sys.exit("ERROR: --network type should be one of the following: slimfly, fattree, dragonfly")
+
 graph.SetPoints(points)
-
-for v1, v2 in term_edges:
-    graph.LazyAddEdge(int(v1), int(v2))
-
-for v1, v2 in local_edges:
-    graph.LazyAddEdge(int(v1), int(v2))
-
-for v1, v2 in global_edges:
-    graph.LazyAddEdge(int(v1), int(v2))
 
 edge_geom = vtk.vtkGraphToPolyData()
 edge_geom.SetInputData(graph)
@@ -280,7 +306,7 @@ for i in range(num_samples):
     cur_step = get_data_step(terminal_data, router_data, i)
     polydata.GetPointData().AddArray(cur_step)
 
-    writer.SetFileName("sfly-vtp/slimfly" + str(i) + ".vtp")
+    writer.SetFileName(filename_out + str(i) + ".vtp")
     writer.SetInputData(polydata)
     writer.Write()
 
