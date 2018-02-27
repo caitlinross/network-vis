@@ -11,7 +11,8 @@ ap.add_argument("-g", "--graphfile", required=True, help="graph ML file")
 ap.add_argument("-r", "--routerfile", required=True, help="router data file")
 ap.add_argument("-t", "--termfile", required=True, help="terminal data file")
 ap.add_argument("-i", "--samp_interval", required=True, help="interval for sampling data")
-ap.add_argument("-e", "--samp_end_time", required=True, help="samp-end-time")
+ap.add_argument("-e", "--samp_end_time", required=True, help="simuation end time of sampling data")
+ap.add_argument("-s", "--ft_scaling", required=False, help="scaling factor for provided fattree coordinates")
 args = vars(ap.parse_args())
 
 
@@ -26,6 +27,19 @@ def sfly_split_routers_terminals(G):
         elif G.node[nodeid]['viz']['color']['g'] == 255:
             # router
             routers.append(int(nodeid))
+    return routers, terminals
+
+
+def split_routers_terminals_id(G, num_terminals):
+    terminals = []
+    routers = []
+    for nodeid in range(G.number_of_nodes()):
+        if nodeid < num_terminals:
+            # terminal
+            terminals.append(nodeid)
+        else:
+            # router
+            routers.append(nodeid)
     return routers, terminals
 
 
@@ -135,6 +149,22 @@ def slimfly_layout(G, num_groups, group_size):
     return pos
 
 
+def fattree_layout(G):
+    pos = {}
+    #routers, terminals = split_routers_terminals_id(G, num_terminals)
+    scale_factor = 100
+    if args["ft_scaling"] is not None:
+        scale_factor = int(args["ft_scaling"])
+
+    for nodeid in G.nodes:
+        x = G.node[nodeid]['x'] * scale_factor
+        y = G.node[nodeid]['y'] * scale_factor
+        z = G.node[nodeid]['z'] * scale_factor
+        pos[nodeid] = [x, y, z]
+
+    return pos
+
+
 # create some random time step data to test animation
 def create_random_temporal_data(all_coords):
     step_arr = vtk.vtkIntArray().NewInstance()
@@ -231,6 +261,21 @@ def sfly_set_vtk_points_array(all_coords, G, routers, terminals):
     return points
 
 
+def ft_set_vtk_points_array(all_coords):
+    points = vtk.vtkPoints().NewInstance()
+    for nodeid, coords in all_coords.iteritems():
+        points.InsertPoint(nodeid, coords[0], coords[1], coords[2])
+
+    return points
+
+
+def data_check(data, entities_start, entities_end, num_samples):
+    for i in range(entities_start, entities_end):
+        if i not in data:
+            data[i] = [0 for _ in range(num_samples)]
+    return data
+
+
 # set these to figure out router groups
 # TODO change to program input args
 router_group_size = 13
@@ -253,8 +298,10 @@ if args["network"] == "slimfly":
     routers, terminals = sfly_split_routers_terminals(G)
     filename_out += "slimfly/slimfly"
 elif args["network"] == "fattree":
+    G = nx.convert_node_labels_to_integers(G)
+    all_coords = fattree_layout(G)
+    routers, terminals = split_routers_terminals_id(G, 3042)
     filename_out += "fattree/fattree"
-    sys.exit("ERROR: fattree has not been implemented yet")
 elif args["network"] == "dragonfly":
     filename_out += "dragonfly/dragonfly"
     sys.exit("ERROR: dragonfly has not been implemented yet")
@@ -265,8 +312,14 @@ print("done")
 
 print("reading router data...")
 router_data = read_sim_data(args["routerfile"], "router", len(terminals), num_samples, int(args["samp_interval"]))
+print(len(router_data))
+router_data = data_check(router_data, len(terminals), G.number_of_nodes(), num_samples)
+print(len(router_data))
 print("done\nreading terminal data...")
 terminal_data = read_sim_data(args["termfile"], "terminal", len(terminals), num_samples, int(args["samp_interval"]))
+print(len(terminal_data))
+terminal_data = data_check(terminal_data, 0, len(terminals), num_samples)
+print(len(terminal_data))
 print("done\n")
 
 # using the vtkGraph approach
@@ -277,6 +330,7 @@ graph.SetNumberOfVertices(G.number_of_nodes())
 # input coords all terminals/routers
 if args["network"] == "slimfly":
     points = sfly_set_vtk_points_array(all_coords, G, routers, terminals)
+    graph.SetPoints(points)
     term_edges, local_edges, global_edges = split_edges(G, routers, router_group_size)
     for v1, v2 in term_edges:
         graph.LazyAddEdge(int(v1), int(v2))
@@ -287,13 +341,15 @@ if args["network"] == "slimfly":
     for v1, v2 in global_edges:
         graph.LazyAddEdge(int(v1), int(v2))
 elif args["network"] == "fattree":
-    sys.exit("ERROR: fattree has not been implemented yet")
+    points = ft_set_vtk_points_array(all_coords)
+    graph.SetPoints(points)
+    for v1, v2 in G.edges:
+        graph.LazyAddEdge(v1, v2)
 elif args["network"] == "dragonfly":
     sys.exit("ERROR: dragonfly has not been implemented yet")
 else:
     sys.exit("ERROR: --network type should be one of the following: slimfly, fattree, dragonfly")
 
-graph.SetPoints(points)
 
 edge_geom = vtk.vtkGraphToPolyData()
 edge_geom.SetInputData(graph)
@@ -302,6 +358,7 @@ edge_geom.Update()
 polydata = edge_geom.GetOutput()
 writer = vtk.vtkXMLPolyDataWriter()
 
+print("creating VTP files")
 for i in range(num_samples):
     cur_step = get_data_step(terminal_data, router_data, i)
     polydata.GetPointData().AddArray(cur_step)
