@@ -198,7 +198,7 @@ def fattree_layout(G, num_terminals):
         coords1[0] *= 1.75
         coords1[1] *= 1.75
         pos[l1_key] = coords1
-        step_arr.InsertValue(key, 2)
+        step_arr.InsertValue(l1_key, 2)
 
         coords = list(coords)
         coords.append(50)
