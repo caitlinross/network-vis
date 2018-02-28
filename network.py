@@ -8,10 +8,10 @@ import sys
 ap = argparse.ArgumentParser()
 ap.add_argument("-n", "--network", required=False, help="network to visualize")
 ap.add_argument("-g", "--graphfile", required=True, help="graph ML file")
-ap.add_argument("-r", "--routerfile", required=True, help="router data file")
-ap.add_argument("-t", "--termfile", required=True, help="terminal data file")
-ap.add_argument("-i", "--samp_interval", required=True, help="interval for sampling data")
-ap.add_argument("-e", "--samp_end_time", required=True, help="simuation end time of sampling data")
+ap.add_argument("-r", "--routerfile", required=False, help="router data file")
+ap.add_argument("-t", "--termfile", required=False, help="terminal data file")
+ap.add_argument("-i", "--samp_interval", required=False, help="interval for sampling data")
+ap.add_argument("-e", "--samp_end_time", required=False, help="simulation end time of sampling data")
 ap.add_argument("-s", "--ft_scaling", required=False, help="scaling factor for provided fattree coordinates")
 args = vars(ap.parse_args())
 
@@ -149,18 +149,66 @@ def slimfly_layout(G, num_groups, group_size):
     return pos
 
 
-def fattree_layout(G):
+def fattree_layout(G, num_terminals):
     pos = {}
-    #routers, terminals = split_routers_terminals_id(G, num_terminals)
-    scale_factor = 100
-    if args["ft_scaling"] is not None:
-        scale_factor = int(args["ft_scaling"])
+    l1_start = num_terminals
+    l2_start = l1_start + 180
+    l3_start = l2_start + 180
 
-    for nodeid in G.nodes:
-        x = G.node[nodeid]['x'] * scale_factor
-        y = G.node[nodeid]['y'] * scale_factor
-        z = G.node[nodeid]['z'] * scale_factor
-        pos[nodeid] = [x, y, z]
+    radix = 36
+    cn_per_router = radix / 2  # also same as router_per_pod
+
+    # start with L3
+    l3_graph = nx.Graph()
+    for i in range(l3_start, G.number_of_nodes()):
+        l3_graph.add_node(i)
+
+    l3_pos = nx.circular_layout(l3_graph, center=[0, 0], dim=2, scale=70)
+    for key, coords in l3_pos.iteritems():
+        coords = list(coords)
+        coords.append(75)
+        pos[key] = coords
+
+    # set up L2
+    l2_graph = nx.Graph()
+    for i in range(l2_start, l3_start):
+        l2_graph.add_node(i)
+
+    l2_pos = nx.circular_layout(l2_graph, center=[0, 0], dim=2, scale=120)
+    # use L2 coordinates to set up corresponding L1 coordinates
+    # makes sure pods are lined up
+    for key, coords in l2_pos.iteritems():
+        l1_key = key - l2_start + l1_start
+        coords1 = list(coords)
+        if key % 2 == 0:
+            coords1.append(30)
+            coords1[0] *= .9
+            coords1[1] *= .9
+        else:
+            coords1.append(20)
+        coords1[0] *= 1.75
+        coords1[1] *= 1.75
+        pos[l1_key] = coords1
+
+        coords = list(coords)
+        coords.append(50)
+        pos[key] = coords
+
+    # set up terminal positions
+    router_graphs = {x: nx.Graph() for x in range(l1_start, l2_start)}
+    term_idx = 0
+    for i in range(l1_start, l2_start):
+        l1_pos = pos[i][0:2]
+        router_graphs[i].add_node(i)
+        for j in range(cn_per_router):
+            router_graphs[i].add_edge(i, term_idx)
+            term_idx += 1
+        term_pos = nx.circular_layout(router_graphs[i], center=l1_pos, dim=2, scale=5)
+        for key, coords in term_pos.iteritems():
+            if key < num_terminals:
+                coords = list(coords)
+                coords.append(1)
+                pos[key] = coords
 
     return pos
 
@@ -281,7 +329,7 @@ def data_check(data, entities_start, entities_end, num_samples):
 router_group_size = 13
 num_router_groups = 26
 
-num_samples = int(args["samp_end_time"])/int(args["samp_interval"])
+num_samples = 1
 
 # read in network connections from Graph XML format
 print("reading graph file...")
@@ -298,9 +346,9 @@ if args["network"] == "slimfly":
     routers, terminals = sfly_split_routers_terminals(G)
     filename_out += "slimfly/slimfly"
 elif args["network"] == "fattree":
-    G = nx.convert_node_labels_to_integers(G)
-    all_coords = fattree_layout(G)
-    routers, terminals = split_routers_terminals_id(G, 3042)
+    #G = nx.convert_node_labels_to_integers(G)
+    all_coords = fattree_layout(G, 3240)
+    routers, terminals = split_routers_terminals_id(G, 3240)
     filename_out += "fattree/fattree"
 elif args["network"] == "dragonfly":
     filename_out += "dragonfly/dragonfly"
@@ -309,18 +357,17 @@ else:
     sys.exit("ERROR: --network type should be one of the following: slimfly, fattree, dragonfly")
 print("done")
 
-
-print("reading router data...")
-router_data = read_sim_data(args["routerfile"], "router", len(terminals), num_samples, int(args["samp_interval"]))
-print(len(router_data))
-router_data = data_check(router_data, len(terminals), G.number_of_nodes(), num_samples)
-print(len(router_data))
-print("done\nreading terminal data...")
-terminal_data = read_sim_data(args["termfile"], "terminal", len(terminals), num_samples, int(args["samp_interval"]))
-print(len(terminal_data))
-terminal_data = data_check(terminal_data, 0, len(terminals), num_samples)
-print(len(terminal_data))
-print("done\n")
+router_data = {}
+terminal_data = {}
+if args["routerfile"] is not None and args["termfile"] is not None:
+    num_samples = int(args["samp_end_time"])/int(args["samp_interval"])
+    print("reading router data...")
+    router_data = read_sim_data(args["routerfile"], "router", len(terminals), num_samples, int(args["samp_interval"]))
+    #router_data = data_check(router_data, len(terminals), G.number_of_nodes(), num_samples)
+    print("done\nreading terminal data...")
+    terminal_data = read_sim_data(args["termfile"], "terminal", len(terminals), num_samples, int(args["samp_interval"]))
+    #terminal_data = data_check(terminal_data, 0, len(terminals), num_samples)
+    print("done\n")
 
 # using the vtkGraph approach
 graph = vtk.vtkMutableUndirectedGraph()
@@ -344,7 +391,7 @@ elif args["network"] == "fattree":
     points = ft_set_vtk_points_array(all_coords)
     graph.SetPoints(points)
     for v1, v2 in G.edges:
-        graph.LazyAddEdge(v1, v2)
+        graph.LazyAddEdge(int(v1), int(v2))
 elif args["network"] == "dragonfly":
     sys.exit("ERROR: dragonfly has not been implemented yet")
 else:
@@ -360,8 +407,9 @@ writer = vtk.vtkXMLPolyDataWriter()
 
 print("creating VTP files")
 for i in range(num_samples):
-    cur_step = get_data_step(terminal_data, router_data, i)
-    polydata.GetPointData().AddArray(cur_step)
+    if args["routerfile"] is not None and args["termfile"] is not None:
+        cur_step = get_data_step(terminal_data, router_data, i)
+        polydata.GetPointData().AddArray(cur_step)
 
     writer.SetFileName(filename_out + str(i) + ".vtp")
     writer.SetInputData(polydata)
