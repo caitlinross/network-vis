@@ -13,6 +13,7 @@ ap.add_argument("-t", "--termfile", required=False, help="terminal data file")
 ap.add_argument("-i", "--samp_interval", required=False, help="interval for sampling data")
 ap.add_argument("-e", "--samp_end_time", required=False, help="simulation end time of sampling data")
 ap.add_argument("-s", "--ft_scaling", required=False, help="scaling factor for provided fattree coordinates")
+ap.add_argument("-o", "--out_path", required=False, help="path in vtp-files to use")
 args = vars(ap.parse_args())
 
 
@@ -355,7 +356,7 @@ all_coords = {}
 routers = []
 terminals = []
 node_arr = vtk.vtkIntArray()
-filename_out = "vtp-files/"
+filename_out = "vtp-files/" + args["out_path"] + "/"
 if flythrough_flag:
     filename_out += "flythrough/" + args["network"]
 else:
