@@ -12,8 +12,9 @@ ap.add_argument("-r", "--routerfile", required=False, help="router data file")
 ap.add_argument("-t", "--termfile", required=False, help="terminal data file")
 ap.add_argument("-i", "--samp_interval", required=False, help="interval for sampling data")
 ap.add_argument("-e", "--samp_end_time", required=False, help="simulation end time of sampling data")
-ap.add_argument("-s", "--ft_scaling", required=False, help="scaling factor for provided fattree coordinates")
 ap.add_argument("-o", "--out_path", required=False, help="path in vtp-files to use")
+ap.add_argument("-s", "--routers_per_group", required=False, help="num routers per group (sfly/dfly only)")
+ap.add_argument("-p", "--num_groups", required=False, help="number of groups (sfly/dfly only)")
 args = vars(ap.parse_args())
 
 
@@ -28,6 +29,26 @@ def sfly_split_routers_terminals(G):
         elif G.node[nodeid]['viz']['color']['g'] == 255:
             # router
             routers.append(int(nodeid))
+    return routers, terminals
+
+
+# get routers and terminal lists from graph
+def dfly_split_routers_terminals(G):
+    terminals = []
+    routers = []
+    for nodeid in G.nodes:
+        if G.node[nodeid]['viz']['color']['r'] == 255:
+            # terminal
+            terminals.append(int(nodeid))
+        elif G.node[nodeid]['viz']['color']['g'] == 255:
+            # router
+            routers.append(int(nodeid))
+
+    for i in range(len(routers)):
+        routers[i] = codes_relative_id(routers[i], len(terminals))
+    for i in range(len(terminals)):
+        terminals[i] = codes_relative_id(terminals[i], len(terminals))
+
     return routers, terminals
 
 
@@ -46,13 +67,13 @@ def split_routers_terminals_id(G, num_terminals):
 
 # split up edges into different lists
 # assumes routers are lists of ints
-def split_edges(G, routers, group_size):
+def sfly_split_edges(g, routers, group_size):
     terminal_edges = []
     local_edges = []
     global_edges = []
     routerid_start = min(routers)
 
-    for v1, v2 in G.edges:
+    for v1, v2 in g.edges:
         v1 = int(v1)
         v2 = int(v2)
 
@@ -70,6 +91,56 @@ def split_edges(G, routers, group_size):
     return terminal_edges, local_edges, global_edges
 
 
+# converts IDs to following format
+# terminal ids = 0 to num_terminals - 1
+# router ids = num_terminals to total_vertices - 1
+def codes_relative_id(global_id, num_terminals):
+    local_id = -1
+    num_nwlp = 8
+    num_term = 4
+    num_rout = 1
+    group_size = num_nwlp + num_term + num_rout
+
+    codes_grp = global_id / group_size
+    rem = global_id % group_size
+    if rem < num_nwlp:
+        print("Warning: found nw-lp id")  # nwlps unused, shouldn't happen
+    elif rem < num_nwlp + num_term:
+        local_id = codes_grp * num_term + (rem - num_nwlp)
+    else:
+        local_id = num_terminals + (codes_grp * num_rout + (rem - num_nwlp - num_term))
+    #print("converting global id " + str(global_id) + " to local id " + str(local_id))
+
+    return local_id
+
+
+# split up edges into different lists
+# assumes routers are lists of ints
+# assumes ids have been converted to
+def dfly_split_edges(g, routers, num_terminals, group_size):
+    terminal_edges = []
+    local_edges = []
+    global_edges = []
+    routerid_start = num_terminals
+
+    for v1, v2 in g.edges:
+        r1 = codes_relative_id(int(v1), num_terminals)
+        r2 = codes_relative_id(int(v2), num_terminals)
+
+        if r1 in routers and r2 in routers:
+            # determine whether intra- or inter- link
+            g1 = (r1 - routerid_start) / group_size
+            g2 = (r2 - routerid_start) / group_size
+            if g1 == g2:
+                local_edges.append((r1, r2))
+            else:
+                global_edges.append((r1, r2))
+        else:
+            terminal_edges.append((r1, r2))
+
+    return terminal_edges, local_edges, global_edges
+
+
 # create my own slimfly graph layout
 # returns a dictionary of positions keyed by node
 def slimfly_layout(G, num_groups, group_size):
@@ -77,7 +148,7 @@ def slimfly_layout(G, num_groups, group_size):
     groupid = -1
     total_vertices = G.number_of_nodes()
     routers, terminals = sfly_split_routers_terminals(G)
-    terminal_edges, local_edges, global_edges = split_edges(G, routers, group_size)
+    terminal_edges, local_edges, global_edges = sfly_split_edges(G, routers, group_size)
     routerid_start = min(routers)
     step_arr = vtk.vtkIntArray().NewInstance()
     step_arr.SetName("NodeType")
@@ -105,7 +176,92 @@ def slimfly_layout(G, num_groups, group_size):
     group_graphs = {x: nx.Graph() for x in range(num_groups)}
     router_graphs = {x: nx.Graph() for x in range(routerid_start, total_vertices)}
     for i in range(routerid_start, total_vertices):
-        if (i - routerid_start) % router_group_size == 0:
+        if (i - routerid_start) % group_size == 0:
+            groupid += 1
+        group_graphs[groupid].add_node(i)
+        router_graphs[i].add_node(i)
+
+    # add in local edges for setting graph layout
+    for v1, v2 in local_edges:
+        grp = (v1 - routerid_start) / group_size
+        group_graphs[grp].add_edge(v1, v2)
+
+    # use circular layout and update center between each call
+    group_coords = {}
+    for i in range(num_groups):
+        group_coords[i] = nx.circular_layout(group_graphs[i], scale=20, center=group_centers[i], dim=2)
+
+    # throw our router coordinates into pos map
+    for grp, gmap in group_coords.iteritems():
+        for router, coords in gmap.iteritems():
+            pos[router] = coords
+            step_arr.InsertValue(router, 2)
+
+    # add terminals and edges to router subgraphs created earlier
+    for v1, v2 in terminal_edges:
+        r = -1
+        t = -1
+        if v1 in terminals:
+            t = v1
+            r = v2
+        elif v2 in terminals:
+            t = v2
+            r = v1
+
+        if t >= 0:
+            router_graphs[r].add_edge(r, t)
+
+    # use each router's position to determine its terminals' positions
+    router_coords = {}
+    for router, rgraph in router_graphs.iteritems():
+        rgraph.remove_node(router)
+        router_coords[router] = nx.circular_layout(rgraph, scale=3, center=list(pos[router]), dim=2)
+
+    # add terminal coordinates to pos map
+    for router, tmap in router_coords.iteritems():
+        for terminal, coords in tmap.iteritems():
+            pos[terminal] = coords
+            step_arr.InsertValue(terminal, 1)
+
+    return pos, step_arr
+
+
+# dragonfly ids based on CODES global LP ids
+# i.e., will need to skip over the ids for nw-lps
+def dragonfly_layout(G, num_groups, group_size):
+    pos = {}
+    groupid = -1
+    total_vertices = G.number_of_nodes()
+    routers, terminals = dfly_split_routers_terminals(G)
+    terminal_edges, local_edges, global_edges = dfly_split_edges(G, routers, len(terminals), group_size)
+    routerid_start = len(terminals)
+    step_arr = vtk.vtkIntArray().NewInstance()
+    step_arr.SetName("NodeType")
+    step_arr.SetNumberOfComponents(1)
+
+    if len(routers) != num_groups * group_size:
+        print("WARNING: num_groups * group_size != num routers for dragonfly layout")
+        return pos
+
+    # determine the center of each group in each subgraph
+    subgraph = nx.Graph()
+    for i in range(num_groups/2):
+        subgraph.add_node(i)
+
+    # only need to do for one subgraph, and just change y to -y in other subgraph
+    subgraph_centers = nx.circular_layout(subgraph, center=[50, 100], dim=2, scale=120)
+    group_centers = {}
+    for id, coords in subgraph_centers.iteritems():
+        coords1 = list(coords)
+        group_centers[id] = coords1
+        coords[1] = -coords[1]
+        group_centers[id + num_groups/2] = coords
+
+    # create group subgraphs to use circular_layout for coordinates
+    group_graphs = {x: nx.Graph() for x in range(num_groups)}
+    router_graphs = {x: nx.Graph() for x in range(routerid_start, total_vertices)}
+    for i in range(routerid_start, total_vertices):
+        if (i - routerid_start) % group_size == 0:
             groupid += 1
         group_graphs[groupid].add_node(i)
         router_graphs[i].add_node(i)
@@ -322,6 +478,41 @@ def sfly_set_vtk_points_array(all_coords, G, routers, terminals):
     return points
 
 
+def dfly_set_vtk_points_array(all_coords, routers, terminals):
+    points = vtk.vtkPoints().NewInstance()
+    for nodeid, coords in all_coords.iteritems():
+        coords = list(coords)
+        # first check if this is a terminal or router
+        if nodeid in terminals:
+            coords.append(2)
+        elif nodeid in routers:
+            coords.append(8)
+        else:
+            print("NO VALUE SAVED\n")
+
+        x = coords[0]
+        y = coords[1]
+        z = coords[2]
+        rad = 0
+        translation = 0
+        if nodeid in routers:
+            if nodeid - min(routers) < (max(routers) + 1 - min(routers))/2:
+                rad = math.pi / 2
+                translation = 30
+            else:
+                rad = 3 * math.pi / 2
+                translation = -30
+        else:
+            if nodeid - min(terminals) < (max(terminals) + 1 - min(terminals))/2:
+                rad = math.pi / 2
+                translation = 30
+            else:
+                rad = 3 * math.pi / 2
+                translation = -30
+        points.InsertPoint(nodeid, x, (y * math.cos(rad) - z * math.sin(rad)) + translation, y * math.sin(rad) + z * math.cos(rad))
+    return points
+
+
 def ft_set_vtk_points_array(all_coords):
     points = vtk.vtkPoints().NewInstance()
     for nodeid, coords in all_coords.iteritems():
@@ -339,8 +530,8 @@ def data_check(data, entities_start, entities_end, num_samples):
 
 # set these to figure out router groups
 # TODO change to program input args
-router_group_size = 13
-num_router_groups = 26
+router_group_size = int(args["routers_per_group"])
+num_router_groups = int(args["num_groups"])
 
 num_samples = 1
 flythrough_flag = False
@@ -356,7 +547,10 @@ all_coords = {}
 routers = []
 terminals = []
 node_arr = vtk.vtkIntArray()
-filename_out = "vtp-files/" + args["out_path"] + "/"
+filename_out = "vtp-files/"
+if args["out_path"] is not None:
+    filename_out += args["out_path"] + "/"
+
 if flythrough_flag:
     filename_out += "flythrough/" + args["network"]
 else:
@@ -365,15 +559,14 @@ print("creating layout for visualization...")
 if args["network"] == "slimfly":
     all_coords, node_arr = slimfly_layout(G, num_router_groups, router_group_size)
     routers, terminals = sfly_split_routers_terminals(G)
-    #filename_out += "slimfly/slimfly"
 elif args["network"] == "fattree":
     #G = nx.convert_node_labels_to_integers(G)
     all_coords, node_arr = fattree_layout(G, 3240)
     routers, terminals = split_routers_terminals_id(G, 3240)
-    #filename_out += "fattree/fattree"
 elif args["network"] == "dragonfly":
-    #filename_out += "dragonfly/dragonfly"
-    sys.exit("ERROR: dragonfly has not been implemented yet")
+    all_coords, node_arr = dragonfly_layout(G, num_router_groups, router_group_size)
+    routers, terminals = dfly_split_routers_terminals(G)
+    #sys.exit("ERROR: dragonfly has not been implemented yet")
 else:
     sys.exit("ERROR: --network type should be one of the following: slimfly, fattree, dragonfly")
 print("done")
@@ -401,7 +594,7 @@ graph.SetNumberOfVertices(G.number_of_nodes())
 if args["network"] == "slimfly":
     points = sfly_set_vtk_points_array(all_coords, G, routers, terminals)
     graph.SetPoints(points)
-    term_edges, local_edges, global_edges = split_edges(G, routers, router_group_size)
+    term_edges, local_edges, global_edges = sfly_split_edges(G, routers, router_group_size)
     for v1, v2 in term_edges:
         graph.LazyAddEdge(int(v1), int(v2))
 
@@ -416,7 +609,19 @@ elif args["network"] == "fattree":
     for v1, v2 in G.edges:
         graph.LazyAddEdge(int(v1), int(v2))
 elif args["network"] == "dragonfly":
-    sys.exit("ERROR: dragonfly has not been implemented yet")
+    points = dfly_set_vtk_points_array(all_coords, routers, terminals)
+    graph.SetPoints(points)
+    term_edges, local_edges, global_edges = dfly_split_edges(G, routers, len(terminals), router_group_size)
+    for v1, v2 in term_edges:
+        graph.LazyAddEdge(int(v1), int(v2))
+
+    for v1, v2 in local_edges:
+        graph.LazyAddEdge(int(v1), int(v2))
+
+    for v1, v2 in global_edges:
+        graph.LazyAddEdge(int(v1), int(v2))
+
+    #sys.exit("ERROR: dragonfly has not been implemented yet")
 else:
     sys.exit("ERROR: --network type should be one of the following: slimfly, fattree, dragonfly")
 
