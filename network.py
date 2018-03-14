@@ -249,7 +249,7 @@ def dragonfly_layout(G, num_groups, group_size):
         subgraph.add_node(i)
 
     # only need to do for one subgraph, and just change y to -y in other subgraph
-    subgraph_centers = nx.circular_layout(subgraph, center=[50, 100], dim=2, scale=120)
+    subgraph_centers = nx.circular_layout(subgraph, center=[0, 0], dim=2, scale=150)
     group_centers = {}
     for id, coords in subgraph_centers.iteritems():
         coords1 = list(coords)
@@ -271,10 +271,26 @@ def dragonfly_layout(G, num_groups, group_size):
         grp = (v1 - routerid_start) / group_size
         group_graphs[grp].add_edge(v1, v2)
 
-    # use circular layout and update center between each call
+    # get router coordinates
     group_coords = {}
+    num_cols = 16
+    num_rows = 6
+    cell_width = 12
+    router_idx = routerid_start
+
     for i in range(num_groups):
-        group_coords[i] = nx.circular_layout(group_graphs[i], scale=20, center=group_centers[i], dim=2)
+        group_coords[i] = {}
+        center = group_centers[i]
+        for j in range(num_rows):
+            for k in range(num_cols):
+                if i % 2 == 1:
+                    x = center[0] + (k - num_cols/2) * cell_width
+                    y = center[1] + (j - num_rows/2) * cell_width
+                else:
+                    y = center[1] + (k - num_cols/2) * cell_width
+                    x = center[0] + (j - num_rows/2) * cell_width
+                group_coords[i][router_idx] = [x, y]
+                router_idx += 1
 
     # throw our router coordinates into pos map
     for grp, gmap in group_coords.iteritems():
@@ -498,18 +514,22 @@ def dfly_set_vtk_points_array(all_coords, routers, terminals):
         if nodeid in routers:
             if nodeid - min(routers) < (max(routers) + 1 - min(routers))/2:
                 rad = math.pi / 2
-                translation = 30
+                translation = 50
             else:
                 rad = 3 * math.pi / 2
-                translation = -30
+                translation = -50
         else:
             if nodeid - min(terminals) < (max(terminals) + 1 - min(terminals))/2:
                 rad = math.pi / 2
-                translation = 30
+                translation = 50
             else:
                 rad = 3 * math.pi / 2
-                translation = -30
-        points.InsertPoint(nodeid, x, (y * math.cos(rad) - z * math.sin(rad)) + translation, y * math.sin(rad) + z * math.cos(rad))
+                translation = -50
+        x1 = x
+        y1 = (y * math.cos(rad) - z * math.sin(rad)) + translation
+        z1 = y * math.sin(rad) + z * math.cos(rad)
+
+        points.InsertPoint(nodeid, x1, y1, z1)
     return points
 
 
