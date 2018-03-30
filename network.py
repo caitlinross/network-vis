@@ -434,10 +434,9 @@ def read_sim_data(filename, node_type, num_terminals, num_samples, samp_interval
                 node_id = num_terminals + int(tokens[cols.index("router_id")])
             elif node_type == "terminal":
                 node_id = int(tokens[cols.index("terminal_id")])
-            #end_time = float(tokens[cols.index("end_time")])
             idx = int(float(tokens[cols.index("end_time")])/samp_interval)
             if node_id not in data:
-                data[node_id] = [0 for i in range(num_samples)]
+                data[node_id] = [0 for _ in range(num_samples)]
             else:
                 data[node_id][idx] = sum([int(i) for i in tokens[cols.index("end_time")+1:]])
 
@@ -550,8 +549,12 @@ def data_check(data, entities_start, entities_end, num_samples):
 
 # set these to figure out router groups
 # TODO change to program input args
-router_group_size = int(args["routers_per_group"])
-num_router_groups = int(args["num_groups"])
+router_group_size = 0
+num_router_groups = 0
+if args["routers_per_group"] is not None:
+    router_group_size = int(args["routers_per_group"])
+if args["num_groups"] is not None:
+    num_router_groups = int(args["num_groups"])
 
 num_samples = 1
 flythrough_flag = False
