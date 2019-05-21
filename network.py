@@ -15,8 +15,8 @@ ap.add_argument("-e", "--samp_end_time", required=False, help="simulation end ti
 ap.add_argument("-o", "--out_path", required=False, help="path in vtp-files to use")
 ap.add_argument("-s", "--routers_per_group", required=False, help="num routers per group (sfly/dfly only)")
 ap.add_argument("-p", "--num_groups", required=False, help="number of groups (sfly/dfly only)")
+ap.add_argument("-q", "--quit_step", required=False, help="time step to stop after")
 args = vars(ap.parse_args())
-
 
 # get routers and terminal lists from graph
 def sfly_split_routers_terminals(G):
@@ -555,6 +555,10 @@ if args["routers_per_group"] is not None:
     router_group_size = int(args["routers_per_group"])
 if args["num_groups"] is not None:
     num_router_groups = int(args["num_groups"])
+quit_step = -1
+if args["quit_step"] is not None:
+    quit_step = int(args["quit_step"])
+
 
 num_samples = 1
 flythrough_flag = False
@@ -659,6 +663,8 @@ writer = vtk.vtkXMLPolyDataWriter()
 
 print("creating VTP files")
 for i in range(num_samples):
+    if quit_step > 0 and i > quit_step:
+        break;
     if not flythrough_flag:
         cur_step = get_data_step(terminal_data, router_data, i)
         polydata.GetPointData().AddArray(cur_step)
