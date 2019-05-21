@@ -16,6 +16,7 @@ ap.add_argument("-o", "--out_path", required=False, help="path in vtp-files to u
 ap.add_argument("-s", "--routers_per_group", required=False, help="num routers per group (sfly/dfly only)")
 ap.add_argument("-p", "--num_groups", required=False, help="number of groups (sfly/dfly only)")
 ap.add_argument("-q", "--quit_step", required=False, help="time step to stop after")
+ap.add_argument("-f", "--engine_file", required=False, help="file for sim engine data")
 args = vars(ap.parse_args())
 
 # get routers and terminal lists from graph
@@ -417,7 +418,7 @@ def create_random_temporal_data(all_coords):
     return step_arr
 
 
-def read_sim_data(filename, node_type, num_terminals, num_samples, samp_interval):
+def read_sim_data(filename, node_type, num_terminals, num_samples, samp_interval, lpid_to_nodeid):
     data = {}
 
     f = open(filename, "r")
@@ -430,6 +431,7 @@ def read_sim_data(filename, node_type, num_terminals, num_samples, samp_interval
             isStart = False
         else:
             tokens = line.strip().split(",")
+            lp_id = int(tokens[cols.index("LP")])
             if node_type == "router":
                 node_id = num_terminals + int(tokens[cols.index("router_id")])
             elif node_type == "terminal":
@@ -439,8 +441,88 @@ def read_sim_data(filename, node_type, num_terminals, num_samples, samp_interval
                 data[node_id] = [0 for _ in range(num_samples)]
             else:
                 data[node_id][idx] = sum([int(i) for i in tokens[cols.index("end_time")+1:]])
+            if lp_id not in lpid_to_nodeid:
+                lpid_to_nodeid[lp_id] = node_id;
 
-    return data
+    return data, lpid_to_nodeid
+
+
+def read_model_gvt_data(filename, node_type, num_terminals, lpid_to_nodeid):
+    data = {}
+    gvt_map = {}
+    gvt_step = 0
+
+    f = open(filename, "r")
+    isStart = True
+    cols = []
+    node_id = -1
+    for line in f:
+        if isStart:
+            cols = line.split(",")
+            isStart = False
+        else:
+            tokens = line.strip().split(",")
+            lpid = int(tokens[cols.index("LP")])
+            if node_type == "router":
+                node_id = num_terminals + int(tokens[cols.index("router_id")])
+            elif node_type == "terminal":
+                node_id = int(tokens[cols.index("terminal_id")])
+
+            idx = float(tokens[cols.index("end_time")])
+            if idx not in gvt_map:
+                gvt_map[idx] = gvt_step
+                gvt_step += 1
+
+            if node_id not in data:
+                data[node_id] = {}
+            else:
+                data[node_id][gvt_map[idx]] = sum([int(i) for i in tokens[cols.index("end_time")+1:]])
+            if lpid not in lpid_to_nodeid:
+                lpid_to_nodeid[lpid] = node_id;
+
+    return data, lpid_to_nodeid
+
+
+# TODO figure out how to convert LP id to router/terminal id
+def read_sim_engine_data(filename, lpid_to_nodeid):
+    data = {}
+    gvt_map = {}
+    gvt_step = 0
+
+    f = open(filename, "r")
+    isStart = True
+    cols = []
+    node_id = -1
+    for line in f:
+        if isStart:
+            cols = line.split(",")
+            isStart = False
+        else:
+            tokens = line.strip().split(",")
+            lpid = int(tokens[cols.index("LP")])
+            if lpid not in lpid_to_nodeid:
+                continue # LP that isn't router or terminal
+            node_id = lpid_to_nodeid[lpid]
+            idx = float(tokens[cols.index("VT")])
+            if idx not in gvt_map:
+                gvt_map[idx] = gvt_step
+                gvt_step += 1
+
+            evrb = int(tokens[cols.index("ev_rb")])
+            per_evrb = 0
+            if int(tokens[cols.index("event_proc")]) + evrb != 0:
+                per_evrb = float(evrb/(float(tokens[cols.index("event_proc")]) + evrb))
+            net = int(tokens[cols.index("event_proc")]) - evrb
+            if net < 0:
+                net = 0
+            if node_id not in data:
+                data[node_id] = {}
+            data[node_id][gvt_map[idx]] = (evrb, net, per_evrb)
+
+    print gvt_step
+    print gvt_map
+
+    return data, gvt_map
 
 
 def get_data_step(term_data, router_data, step):
@@ -454,6 +536,26 @@ def get_data_step(term_data, router_data, step):
         step_arr.InsertValue(key, router_data[key][step])
 
     return step_arr
+
+
+def get_engine_step(engine_data, step):
+    step_arr = vtk.vtkIntArray().NewInstance()
+    step_arr.SetName("Event_Rolled_Back")
+    step_arr.SetNumberOfComponents(1)
+    rb_arr = vtk.vtkDoubleArray().NewInstance()
+    rb_arr.SetName("percent_evrb")
+    rb_arr.SetNumberOfComponents(1)
+    net_arr = vtk.vtkIntArray().NewInstance()
+    net_arr.SetName("Net_Events")
+    net_arr.SetNumberOfComponents(1)
+
+    for node_id, data in engine_data.iteritems():
+        if step in data:
+            step_arr.InsertValue(node_id, engine_data[node_id][step][0])
+            net_arr.InsertValue(node_id, engine_data[node_id][step][1])
+            rb_arr.InsertValue(node_id, engine_data[node_id][step][2])
+
+    return step_arr, net_arr, rb_arr
 
 
 def sfly_set_vtk_points_array(all_coords, G, routers, terminals):
@@ -547,6 +649,10 @@ def data_check(data, entities_start, entities_end, num_samples):
     return data
 
 
+pdes_flag = False
+if args["engine_file"] is not None:
+    pdes_flag = True
+
 # set these to figure out router groups
 # TODO change to program input args
 router_group_size = 0
@@ -600,14 +706,27 @@ print("done")
 
 router_data = {}
 terminal_data = {}
-if not flythrough_flag:
+sim_engine_data = {}
+gvt_map = {}
+lpid_to_nodeid = {}
+
+if not flythrough_flag and not pdes_flag:
     num_samples = int(args["samp_end_time"])/int(args["samp_interval"])
     print("reading router data...")
-    router_data = read_sim_data(args["routerfile"], "router", len(terminals), num_samples, int(args["samp_interval"]))
+    router_data, lpid_to_nodeid = read_sim_data(args["routerfile"], "router", len(terminals), num_samples, int(args["samp_interval"]), lpid_to_nodeid)
     #router_data = data_check(router_data, len(terminals), G.number_of_nodes(), num_samples)
     print("done\nreading terminal data...")
-    terminal_data = read_sim_data(args["termfile"], "terminal", len(terminals), num_samples, int(args["samp_interval"]))
+    terminal_data, lpid_to_nodeid = read_sim_data(args["termfile"], "terminal", len(terminals), num_samples, int(args["samp_interval"]), lpid_to_nodeid)
     #terminal_data = data_check(terminal_data, 0, len(terminals), num_samples)
+    print("done\n")
+elif not flythrough_flag and pdes_flag:
+    print("reading router data...")
+    router_data, lpid_to_nodeid = read_model_gvt_data(args["routerfile"], "router", len(terminals), lpid_to_nodeid)
+    #router_data = data_check(router_data, len(terminals), G.number_of_nodes(), num_samples)
+    print("done\nreading terminal data...")
+    terminal_data, lpid_to_nodeid = read_model_gvt_data(args["termfile"], "terminal", len(terminals), lpid_to_nodeid)
+    print("done\nreading sim engine data...")
+    sim_engine_data, gvt_map = read_sim_engine_data(args["engine_file"], lpid_to_nodeid)
     print("done\n")
 else:
     flythrough_flag = True
@@ -662,12 +781,17 @@ polydata.GetPointData().AddArray(node_arr)
 writer = vtk.vtkXMLPolyDataWriter()
 
 print("creating VTP files")
-for i in range(num_samples):
+#for i in range(num_samples):
+for i in range(1, len(gvt_map), 1):
     if quit_step > 0 and i > quit_step:
         break;
     if not flythrough_flag:
         cur_step = get_data_step(terminal_data, router_data, i)
         polydata.GetPointData().AddArray(cur_step)
+        engine_step, net_step, rb_step = get_engine_step(sim_engine_data, i)
+        polydata.GetPointData().AddArray(engine_step)
+        polydata.GetPointData().AddArray(net_step)
+        polydata.GetPointData().AddArray(rb_step)
 
     writer.SetFileName(filename_out + str(i) + ".vtp")
     writer.SetInputData(polydata)
