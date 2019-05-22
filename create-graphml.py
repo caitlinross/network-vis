@@ -53,10 +53,10 @@ def read_codes_conf():
 def topology_connections():
     f = open(args["connections_file"], "r")
     data = csv.DictReader(f)
-    routers = {}
+    #routers = {}
     inter_edges = {}
     intra_edges = {}
-    full_graph = nx.Graph()
+    full_graph = nx.Graph(network="dragonfly", num_groups=num_groups, routers_group=num_routers//num_groups, num_routers=num_routers, num_terminals=num_terminals)
     for row in data:
         src_gid = int(row["src_gid"])
         src_type = int(row["src_type"])
@@ -75,8 +75,8 @@ def topology_connections():
             #routers[dest_gid].add_node(src_gid, lptype="terminal", term_id=src_type_id, group_id=src_group)
             #routers[dest_gid].add_edge(src_gid, dest_gid, link="term")
 
-            full_graph.add_node(dest_gid, lptype="router", router_id=dest_type_id, group_id=dest_group)
-            full_graph.add_node(src_gid, lptype="terminal", term_id=src_type_id, group_id=src_group)
+            full_graph.add_node(dest_gid, lpid=dest_gid, lptype="router", router_id=dest_type_id, group_id=dest_group)
+            full_graph.add_node(src_gid, lpid=src_gid, lptype="terminal", term_id=src_type_id, group_id=src_group, router_id=dest_gid)
             full_graph.add_edge(src_gid, dest_gid, link="term")
 
         if src_type == 0 and dest_type == 0:
